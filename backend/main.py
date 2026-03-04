@@ -8,20 +8,20 @@ from database import init_db
 from redis_client import init_redis, close_redis
 from routes.game import router as game_router
 from routes.leaderboard import router as leaderboard_router
-from bot import router as bot_router
+from bot import router as bot_router, setup_webhook
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await init_redis()
+    await setup_webhook()  # <- THIS WAS MISSING
     yield
     await close_redis()
 
 
 app = FastAPI(
     title="Tap Kings API",
-    description="Real-time Telegram Mini App game backend",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -42,8 +42,3 @@ app.include_router(bot_router, prefix="/webhook", tags=["webhook"])
 frontend_path = os.path.join(os.path.dirname(__file__), "../frontend")
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "tap-kings"}
