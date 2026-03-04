@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Tap Kings</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #0f0f1a; --surface: #1a1a2e; --accent: #f5a623;
+    --gold: #ffd700; --text: #ffffff; --muted: #888;
+    --danger: #ff4757; --success: #2ed573;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; overflow: hidden;
+  }
+  .screen { display: none; flex-direction: column; align-items: center; width: 100%; min-height: 100vh; padding: 20px 16px; }
+  .screen.active { display: flex; }
+
+  /* HOME */
+  #home { justify-content: center; gap: 24px; }
+
+  .crown-icon {
+    width: 80px; height: 80px;
+    animation: float 3s ease-in-out infinite;
+  }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
+
+  .title { font-size: 36px; font-weight: 900; color: var(--gold); text-shadow: 0 0 30px rgba(255,215,0,0.5); }
+  .subtitle { font-size: 16px; color: var(--muted); text-align: center; }
+
+  .btn-play {
+    background: linear-gradient(135deg, var(--accent), #ff6b35);
+    color: white; border: none; border-radius: 50px;
+    padding: 18px 60px; font-size: 20px; font-weight: 700;
+    cursor: pointer; box-shadow: 0 8px 32px rgba(245,166,35,0.4);
+    transition: transform 0.1s; margin-top: 12px;
+  }
+  .btn-play:active { transform: scale(0.95); }
+
+  .stats-row { display: flex; gap: 24px; margin-top: 8px; }
+  .stat-box { background: var(--surface); border-radius: 16px; padding: 16px 24px; text-align: center; }
+  .stat-num { font-size: 28px; font-weight: 700; color: var(--gold); }
+  .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* GAME */
+  #game { justify-content: space-between; padding-top: 30px; padding-bottom: 40px; }
+
+  .timer-ring { position: relative; width: 120px; height: 120px; }
+  .timer-ring svg { transform: rotate(-90deg); }
+  .timer-ring circle { fill: none; stroke-width: 8; }
+  .timer-ring .bg { stroke: var(--surface); }
+  .timer-ring .progress { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  .timer-num {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 32px; font-weight: 900;
+  }
+
+  .score-display { text-align: center; }
+  .score-num { font-size: 72px; font-weight: 900; color: var(--gold); line-height: 1; }
+  .score-label { font-size: 14px; color: var(--muted); margin-top: 4px; }
+
+  .tap-btn {
+    width: 200px; height: 200px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #ff8c00, #cc5500);
+    border: 4px solid var(--gold); cursor: pointer;
+    box-shadow: 0 0 40px rgba(255,165,0,0.5), inset 0 -8px 0 rgba(0,0,0,0.3);
+    transition: transform 0.05s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; font-weight: 900; color: white; letter-spacing: 2px;
+    -webkit-user-select: none; user-select: none;
+  }
+  .tap-btn:active, .tap-btn.tapped {
+    transform: scale(0.92);
+    box-shadow: 0 0 20px rgba(255,165,0,0.3), inset 0 -2px 0 rgba(0,0,0,0.3);
+  }
+  .cheat-warn { color: var(--danger); font-size: 13px; height: 20px; font-weight: 600; }
+
+  /* RESULTS */
+  #results { justify-content: center; gap: 20px; }
+  .result-title { font-size: 32px; font-weight: 900; color: var(--gold); }
+  .result-score { font-size: 64px; font-weight: 900; color: var(--gold); }
+  .result-label { font-size: 16px; color: var(--muted); }
+  .result-rank { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .new-best { color: var(--success); font-size: 18px; font-weight: 700; }
+
+  .btn-row { display: flex; gap: 12px; margin-top: 8px; }
+  .btn-secondary {
+    background: var(--surface); color: var(--text);
+    border: 1px solid #333; border-radius: 50px;
+    padding: 14px 28px; font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #ff6b35);
+    color: white; border: none; border-radius: 50px;
+    padding: 14px 28px; font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+
+  /* LEADERBOARD */
+  .leaderboard { width: 100%; max-width: 360px; }
+  .lb-title {
+    font-size: 13px; font-weight: 700; margin-bottom: 12px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .lb-live {
+    display: inline-block; width: 8px; height: 8px;
+    background: var(--success); border-radius: 50%;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .lb-item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 8px;
+  }
+  .lb-rank { font-size: 16px; font-weight: 700; width: 28px; text-align: center; color: var(--gold); }
+  .lb-name { flex: 1; font-weight: 600; font-size: 15px; }
+  .lb-score { font-weight: 700; color: var(--gold); }
+
+  /* PARTICLES */
+  .particle {
+    position: fixed; pointer-events: none;
+    font-size: 20px; font-weight: 900; color: var(--gold);
+    animation: fly 0.8s ease-out forwards; z-index: 999;
+  }
+  @keyframes fly { 0%{opacity:1;transform:translateY(0) scale(1)} 100%{opacity:0;transform:translateY(-80px) scale(1.5)} }
+</style>
+</head>
+<body>
+
+<!-- HOME -->
+<div class="screen active" id="home">
+  <svg class="crown-icon" viewBox="0 0 100 80" fill="none">
+    <polygon points="10,70 20,20 50,50 80,20 90,70" fill="#ffd700" stroke="#f5a623" stroke-width="3"/>
+    <circle cx="10" cy="70" r="6" fill="#f5a623"/>
+    <circle cx="50" cy="70" r="6" fill="#f5a623"/>
+    <circle cx="90" cy="70" r="6" fill="#f5a623"/>
+    <circle cx="20" cy="20" r="5" fill="#ff6b35"/>
+    <circle cx="50" cy="50" r="5" fill="#ff6b35"/>
+    <circle cx="80" cy="20" r="5" fill="#ff6b35"/>
+    <rect x="5" y="72" width="90" height="8" rx="4" fill="#f5a623"/>
+  </svg>
+
+  <div class="title">Tap Kings</div>
+  <div class="subtitle">30 seconds. Tap as fast as you can.<br>Become the king.</div>
+
+  <div class="stats-row">
+    <div class="stat-box">
+      <div class="stat-num" id="home-best">0</div>
+      <div class="stat-label">Best</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-num" id="home-games">0</div>
+      <div class="stat-label">Games</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-num" id="home-rank">#-</div>
+      <div class="stat-label">Rank</div>
+    </div>
+  </div>
+
+  <button class="btn-play" id="btn-start">PLAY NOW</button>
+
+  <div class="leaderboard">
+    <div class="lb-title"><span class="lb-live"></span> Live Leaderboard</div>
+    <div id="lb-list"><div style="color:var(--muted);text-align:center;padding:20px">Loading...</div></div>
+  </div>
+</div>
+
+<!-- GAME -->
+<div class="screen" id="game">
+  <div class="timer-ring">
+    <svg width="120" height="120" viewBox="0 0 120 120">
+      <circle class="bg" cx="60" cy="60" r="52"/>
+      <circle class="progress" id="timer-circle" cx="60" cy="60" r="52"
+        stroke-dasharray="326.7" stroke-dashoffset="0"/>
+    </svg>
+    <div class="timer-num" id="timer-display">30</div>
+  </div>
+
+  <div class="score-display">
+    <div class="score-num" id="score-display">0</div>
+    <div class="score-label">TAPS</div>
+  </div>
+
+  <button class="tap-btn" id="tap-btn">TAP!</button>
+  <div class="cheat-warn" id="cheat-warn"></div>
+</div>
+
+<!-- RESULTS -->
+<div class="screen" id="results">
+  <div class="result-title">Tap Kings</div>
+  <div>
+    <div class="result-score" id="result-score">0</div>
+    <div class="result-label">taps in 30 seconds</div>
+  </div>
+  <div class="new-best" id="new-best" style="display:none">New Personal Best!</div>
+  <div class="result-rank" id="result-rank"></div>
+
+  <div class="leaderboard" style="margin-top:8px">
+    <div class="lb-title">Final Leaderboard</div>
+    <div id="result-lb-list"></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-secondary" id="btn-share">Share</button>
+    <button class="btn-primary" id="btn-retry">Play Again</button>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp || {
+  ready: () => {}, expand: () => {},
+  initData: 'dev',
+  initDataUnsafe: { user: { id: 123456789, first_name: 'TestUser', username: 'testuser' } },
+  HapticFeedback: { impactOccurred: () => {}, notificationOccurred: () => {} },
+  switchInlineQuery: null, close: () => {}
+};
+tg.ready();
+tg.expand();
+
+const API = '';
+const GAME_DURATION = 30;
+let state = {
+  sessionKey: null, score: 0, timeLeft: GAME_DURATION,
+  timer: null, ws: null,
+  user: tg.initDataUnsafe?.user || { id: 0, first_name: 'Player', username: 'player' }
+};
+
+function getHeaders() {
+  return { 'Content-Type': 'application/json', 'X-Init-Data': tg.initData || 'dev' };
+}
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+function spawnParticle(x, y) {
+  const p = document.createElement('div');
+  p.className = 'particle';
+  p.textContent = '+1';
+  p.style.left = (x - 15) + 'px';
+  p.style.top = (y - 20) + 'px';
+  document.body.appendChild(p);
+  setTimeout(() => p.remove(), 800);
+}
+function renderLeaderboard(players, containerId) {
+  const container = document.getElementById(containerId);
+  if (!players || !players.length) {
+    container.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px">No players yet!</div>';
+    return;
+  }
+  container.innerHTML = players.map((p, i) => `
+    <div class="lb-item">
+      <div class="lb-rank">${i + 1}</div>
+      <div class="lb-name">${p.username || 'Player'}</div>
+      <div class="lb-score">${p.score}</div>
+    </div>
+  `).join('');
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/game/ws`;
+  state.ws = new WebSocket(wsUrl);
+  state.ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'leaderboard_init' || msg.type === 'leaderboard_update') {
+      renderLeaderboard(msg.data, 'lb-list');
+      renderLeaderboard(msg.data, 'result-lb-list');
+    }
+  };
+  state.ws.onclose = () => setTimeout(connectWS, 2000);
+  setInterval(() => {
+    if (state.ws?.readyState === WebSocket.OPEN) state.ws.send('ping');
+  }, 20000);
+}
+
+async function loadMyStats() {
+  try {
+    const res = await fetch(`${API}/leaderboard/me`, { headers: getHeaders() });
+    const data = await res.json();
+    document.getElementById('home-rank').textContent = data.rank ? `#${data.rank}` : '#-';
+    document.getElementById('home-best').textContent = data.score || 0;
+  } catch {}
+}
+
+async function startGame() {
+  showScreen('game');
+  state.score = 0;
+  state.timeLeft = GAME_DURATION;
+  document.getElementById('score-display').textContent = '0';
+  document.getElementById('timer-display').textContent = GAME_DURATION;
+  document.getElementById('cheat-warn').textContent = '';
+  const circle = document.getElementById('timer-circle');
+  circle.style.strokeDashoffset = '0';
+  circle.style.stroke = 'var(--accent)';
+
+  try {
+    const res = await fetch(`${API}/game/start`, { method: 'POST', headers: getHeaders() });
+    const data = await res.json();
+    state.sessionKey = data.session_key;
+  } catch {
+    state.sessionKey = 'demo-' + Date.now();
+  }
+
+  state.timer = setInterval(() => {
+    state.timeLeft--;
+    document.getElementById('timer-display').textContent = state.timeLeft;
+    const circumference = 326.7;
+    const progress = state.timeLeft / GAME_DURATION;
+    circle.style.strokeDashoffset = circumference * (1 - progress);
+    if (state.timeLeft <= 10) circle.style.stroke = 'var(--danger)';
+    if (state.timeLeft <= 0) { clearInterval(state.timer); finishGame(); }
+  }, 1000);
+}
+
+async function handleTap(e) {
+  if (state.timeLeft <= 0) return;
+  const btn = document.getElementById('tap-btn');
+  btn.classList.add('tapped');
+  setTimeout(() => btn.classList.remove('tapped'), 50);
+  const rect = btn.getBoundingClientRect();
+  spawnParticle(
+    rect.left + rect.width / 2 + (Math.random() - 0.5) * 60,
+    rect.top + rect.height / 2 + (Math.random() - 0.5) * 60
+  );
+  tg.HapticFeedback?.impactOccurred('light');
+  try {
+    const res = await fetch(`${API}/game/tap`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ session_key: state.sessionKey })
+    });
+    const data = await res.json();
+    if (data.allowed) {
+      state.score = data.score;
+      document.getElementById('score-display').textContent = state.score;
+      document.getElementById('cheat-warn').textContent = '';
+    } else {
+      document.getElementById('cheat-warn').textContent = 'Too fast!';
+    }
+  } catch {
+    state.score++;
+    document.getElementById('score-display').textContent = state.score;
+  }
+}
+
+async function finishGame() {
+  tg.HapticFeedback?.notificationOccurred('success');
+  let finalScore = state.score, isBest = false, rank = null;
+  try {
+    const res = await fetch(`${API}/game/finish`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ session_key: state.sessionKey })
+    });
+    const data = await res.json();
+    finalScore = data.final_score;
+    isBest = data.is_best;
+    rank = data.rank;
+  } catch {}
+
+  document.getElementById('result-score').textContent = finalScore;
+  document.getElementById('new-best').style.display = isBest ? 'block' : 'none';
+  document.getElementById('result-rank').textContent = rank ? `You ranked #${rank} globally!` : '';
+  document.getElementById('home-best').textContent = finalScore;
+  showScreen('results');
+}
+
+document.getElementById('btn-start').addEventListener('click', startGame);
+document.getElementById('btn-retry').addEventListener('click', startGame);
+document.getElementById('tap-btn').addEventListener('click', handleTap);
+document.getElementById('tap-btn').addEventListener('touchstart', (e) => {
+  e.preventDefault(); handleTap(e);
+}, { passive: false });
+
+document.getElementById('btn-share').addEventListener('click', () => {
+  const score = document.getElementById('result-score').textContent;
+  if (tg.switchInlineQuery) {
+    tg.switchInlineQuery(`I tapped ${score} times in Tap Kings! Can you beat me?`);
+  } else {
+    // Browser fallback - copy to clipboard
+    navigator.clipboard?.writeText(`I scored ${score} taps in Tap Kings!`)
+      .then(() => alert('Score copied to clipboard!'))
+      .catch(() => alert(`Your score: ${score} taps!`));
+  }
+});
+
+connectWS();
+loadMyStats();
+</script>
+</body>
+</html>
