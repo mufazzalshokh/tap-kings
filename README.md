@@ -1,188 +1,159 @@
-# ��� Tap Kings — Real-Time Telegram Mini App
+# 👑 Tap Kings — Real-time Telegram Mini App Clicker Game
 
-> A competitive real-time clicker game built as a Telegram Mini App.
-> Tap as fast as you can in 30 seconds and compete on a live global leaderboard.
-
-��� **Bot:** [@TapKingsBot](https://t.me/TapKingsBot)
-
----
+A production-ready Telegram Mini App where players tap as fast as they can
+in 30 seconds and compete on a live global leaderboard. Built with FastAPI,
+aiogram v3, Redis Sorted Sets, WebSockets, and PostgreSQL — deployed on Railway.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Telegram Client                       │
-│                                                         │
-│   ┌──────────────┐        ┌─────────────────────────┐  │
-│   │   Bot Chat   │        │   Mini App (WebView)    │  │
-│   │  /start cmd  │        │   React-like HTML/JS    │  │
-│   └──────┬───────┘        └────────────┬────────────┘  │
-└──────────┼─────────────────────────────┼────────────────┘
-           │ webhook                     │ HTTPS + WS
-           ▼                             ▼
-┌─────────────────────────────────────────────────────────┐
-│                  FastAPI Backend (async)                  │
-│                                                         │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │   auth.py   │  │  routes/     │  │    bot.py     │  │
-│  │ HMAC-SHA256 │  │  game.py     │  │  aiogram v3   │  │
-│  │  initData   │  │  leaderboard │  │   webhooks    │  │
-│  └─────────────┘  └──────┬───────┘  └───────────────┘  │
-└─────────────────────────┼───────────────────────────────┘
-                          │
-            ┌─────────────┼─────────────┐
-            ▼             ▼             ▼
-    ┌──────────────┐ ┌─────────┐ ┌──────────────┐
-    │  PostgreSQL  │ │  Redis  │ │  WebSocket   │
-    │  Users       │ │ Sorted  │ │  Broadcast   │
-    │  Sessions    │ │  Sets   │ │  Leaderboard │
-    │  Best scores │ │ Rate    │ │  Real-time   │
-    └──────────────┘ │ Limiter │ └──────────────┘
-                     └─────────┘
+Telegram User
+     │  opens Mini App
+     ▼
+Frontend (HTML/JS)  ──── WebSocket ────► FastAPI (live leaderboard updates)
+     │
+     │  REST API calls (X-Init-Data header)
+     ▼
+FastAPI Backend
+     ├── Auth: Telegram initData HMAC-SHA256 validation
+     ├── Game: start → tap (anti-cheat) → finish
+     ├── Redis: leaderboard + session counters + rate limiter
+     └── PostgreSQL: persistent user records + session history
+          │
+          ▼
+aiogram v3 Bot (webhook mode, same FastAPI process)
+     └── /start, /leaderboard, /help commands
+     └── Channel notifications on new high scores
 ```
 
----
+## Features
+
+### 🎮 Game Flow
+1. `POST /game/start` — creates a `GameSession` in PostgreSQL, initialises a
+   Redis counter with 35-second TTL
+2. `POST /game/tap` — anti-cheat check → atomic Redis `INCR` → returns current score
+3. `POST /game/finish` — reads final score from Redis → persists to PostgreSQL →
+   updates Redis leaderboard → broadcasts updated top 10 to all WebSocket clients
+
+### 🔒 Authentication
+Telegram Mini Apps send a signed `initData` string with every request.
+The backend validates it using **HMAC-SHA256** per the official Telegram spec:
+
+```python
+# Secret key = HMAC-SHA256("WebAppData", bot_token)
+# Then verify: HMAC-SHA256(secret_key, data_check_string) == received_hash
+```
+
+No sessions, no JWTs — every request is stateless and cryptographically verified.
+`DEV_MODE=true` bypasses validation for local development.
+
+### 🛡️ Anti-Cheat — Redis Sliding Window Rate Limiter
+Blocks impossible tap speeds (> 20 taps/second) using a **sliding window**
+(more accurate than fixed window — no boundary burst exploitation):
+
+```python
+pipe.zremrangebyscore(key, 0, now - 1.0)  # remove events outside window
+pipe.zcard(key)                            # count events in window
+pipe.zadd(key, {str(now): now})            # record this event
+pipe.expire(key, 2)                        # auto-cleanup
+# All 4 ops in a single pipeline round-trip
+```
+
+`cheating_detected` is flagged on the `GameSession` record in PostgreSQL.
+
+### 🏆 Leaderboard — Redis Sorted Sets
+O(log N) insert and lookup using Redis Sorted Sets:
+
+| Operation | Redis Command | Complexity |
+|---|---|---|
+| Update score | `ZADD` | O(log N) |
+| Get top N | `ZREVRANGE ... WITHSCORES` | O(log N + M) |
+| Get user rank | `ZREVRANK` | O(log N) |
+
+The leaderboard is always in Redis — PostgreSQL stores the authoritative record.
+
+### 📡 Real-time Leaderboard via WebSocket
+On `POST /game/finish`, the backend broadcasts the updated top 10 to every
+connected WebSocket client instantly — no polling required:
+
+```
+Client connects → receives current top 10
+Any player finishes → all connected clients receive leaderboard_update event
+```
+
+### 🤖 Telegram Bot (aiogram v3, webhook mode)
+- `/start` — opens the Mini App via `WebAppInfo` inline button
+- `/leaderboard` — shows top 5 from Redis directly in chat
+- `/help` — command reference
+- Channel notifications on new high scores via `CHANNEL_ID` env var
+- Runs as a **webhook inside the same FastAPI process** (no separate service)
+- `MenuButtonWebApp` set on startup for persistent Play button in chat header
+
+### 🚀 Deployment (Railway)
+Railway-aware database connection: auto-detects internal (`railway.internal`)
+vs external URLs and sets `ssl: disable` vs `ssl: require` accordingly —
+no manual config change needed between environments.
 
 ## Tech Stack
 
-| Layer | Technology | Purpose |
-|---|---|---|
-| **Bot** | aiogram v3 | Telegram Bot API + webhooks |
-| **Backend** | FastAPI + asyncio | Async REST API + WebSocket |
-| **Auth** | HMAC-SHA256 | Telegram initData validation |
-| **Cache** | Redis Sorted Sets | Real-time leaderboard |
-| **Anti-cheat** | Redis Sliding Window | Rate limiting (max 20 taps/sec) |
-| **Database** | PostgreSQL + SQLAlchemy async | Users, sessions, scores |
-| **Frontend** | Vanilla JS + Telegram SDK | Mini App UI |
-| **Deploy** | Railway + Docker | Production HTTPS |
-
----
-
-## Key Features
-
-- ✅ **Telegram WebApp auth** — HMAC-SHA256 initData validation on every request
-- ✅ **Real-time leaderboard** — WebSocket broadcasts live updates to all players
-- ✅ **Anti-cheat system** — Redis rate limiter blocks >20 taps/second
-- ✅ **Async throughout** — FastAPI + asyncpg + redis.asyncio
-- ✅ **PostgreSQL** — Users, game sessions, best scores, indexed queries
-- ✅ **Bot integration** — aiogram v3, webhook mode, announces high scores
-- ✅ **Docker** — Full containerized deployment
-
----
-
-## Local Development
-
-### Prerequisites
-- Python 3.11+
-- Docker + Docker Compose
-- A Telegram Bot Token from @BotFather
-
-### Setup
-
-```bash
-# 1. Clone
-git clone https://github.com/yourusername/tap-kings
-cd tap-kings
-
-# 2. Create .env
-cp .env.example .env
-# Edit .env and add your BOT_TOKEN
-# Set DEV_MODE=true for local (skips Telegram auth)
-
-# 3. Run everything
-docker compose up --build
-
-# 4. Open http://localhost:8000
-```
-
-### For Telegram Mini App testing locally:
-```bash
-# Install ngrok
-npm install -g ngrok
-
-# Expose local port
-ngrok http 8000
-
-# Copy the https URL to your .env APP_URL
-# Then set webhook:
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d "url=https://your-ngrok-url.ngrok.io/webhook/telegram"
-```
-
----
-
-## Deploy to Railway
-
-```bash
-# 1. Install Railway CLI
-npm install -g @railway/cli
-
-# 2. Login
-railway login
-
-# 3. Create project
-railway init
-
-# 4. Add PostgreSQL + Redis plugins in Railway dashboard
-
-# 5. Set environment variables in Railway dashboard:
-#    BOT_TOKEN=...
-#    APP_URL=https://your-app.railway.app
-
-# 6. Deploy
-railway up
-
-# 7. Set Telegram webhook
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d "url=https://your-app.railway.app/webhook/telegram"
-```
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `GET` | `/health` | None | Health check |
-| `POST` | `/game/start` | initData | Start new session |
-| `POST` | `/game/tap` | initData | Register tap (anti-cheat) |
-| `POST` | `/game/finish` | initData | End session, save score |
-| `WS` | `/game/ws` | None | Live leaderboard feed |
-| `GET` | `/leaderboard/top` | None | Top 10 players |
-| `GET` | `/leaderboard/me` | initData | My rank + score |
-| `POST` | `/webhook/telegram` | Telegram | Bot webhook |
-
----
+| Layer | Technology |
+|---|---|
+| API | FastAPI (async), Python 3.11 |
+| Bot | aiogram v3 (webhook mode) |
+| Cache / Leaderboard | Redis (aioredis) — Sorted Sets, INCR, sliding window |
+| Database | PostgreSQL + SQLAlchemy 2.0 async (asyncpg) |
+| Auth | Telegram initData HMAC-SHA256 |
+| Real-time | WebSocket (FastAPI native) |
+| Deployment | Railway |
 
 ## Project Structure
 
 ```
-tap-kings/                     ← root
-├── .env.example
-├── Dockerfile
-├── README.md
-├── docker-compose.yml
-├── railway.toml
+tap-kings/
 ├── backend/
-│   ├── auth.py                     <- telegram initData HMAC-SHA256
-│   ├── bot.py                      <- aiogram V3 bot + webhook
-│   ├── database.py                 <- SQLAlchemy async + PostgreSQL
-│   ├── main.py                     < FastAPI app + CORS + lifespan
-│   ├── models.py                   <- user, GameSession ORM models
-│   ├── redis_client.py             <- leaderboard (sorted sets) + rate limiting
-│   ├── requirements.txt
+│   ├── main.py              # FastAPI app, lifespan, middleware
+│   ├── auth.py              # Telegram initData HMAC-SHA256 validation
+│   ├── bot.py               # aiogram v3 bot + webhook handler
+│   ├── database.py          # SQLAlchemy async engine (Railway SSL-aware)
+│   ├── models.py            # User + GameSession ORM models
+│   ├── redis_client.py      # Leaderboard, session counters, rate limiter
 │   └── routes/
-│       ├── game.py                 <- game endpoints + Websocket
-│       └── leaderboard.py          <- leaderboard endpoint
-└── frontend/
-    └── index.html                  <- full mini app UI (single file)
-
+│       ├── game.py          # /game/start, /tap, /finish + WebSocket
+│       └── leaderboard.py   # /leaderboard/top, /me
+└── frontend/                # Static Mini App (served by FastAPI)
 ```
 
----
+## Getting Started
 
-## Author
+```bash
+git clone https://github.com/mufazzalshokh/tap-kings.git
+cd tap-kings/backend
+pip install -r requirements.txt
 
-**Mufazzalshokh Ulashev** — Backend Engineer
-- FastAPI | PostgreSQL | Redis | Docker | aiogram | LangChain | RAG
-- [LinkedIn](https://linkedin.com/in/mufazzalshokh-ulashev/)
+# .env
+BOT_TOKEN=your_telegram_bot_token
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tapkings
+REDIS_URL=redis://localhost:6379
+APP_URL=https://your-app.railway.app
+DEV_MODE=true   # skip initData validation locally
+
+python main.py
+```
+
+## Key Design Decisions
+
+- **Redis INCR for tap counting** — atomic increment with no race conditions
+  under concurrent requests from the same user.
+- **Sliding window over fixed window rate limiting** — fixed windows allow a
+  burst of 40 taps at a window boundary (20 at end + 20 at start). Sliding
+  window prevents this.
+- **Pipeline for rate limiter** — 4 Redis commands execute in a single round
+  trip, keeping tap latency minimal.
+- **Redis TTL on session keys** — sessions expire automatically 35 seconds
+  after creation (30s game + 5s buffer), no cleanup job needed.
+- **Webhook in same process** — aiogram v3 webhook handler mounted on the
+  same FastAPI app eliminates a second service to manage and deploy.
+- **WebSocket broadcast on finish** — event-driven; no client polling. All
+  spectators see the updated leaderboard the moment any player finishes.
+- **Railway internal SSL detection** — avoids SSL handshake on private network
+  while enforcing it on public connections automatically.
